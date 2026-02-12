@@ -1,0 +1,17 @@
+services:
+  auth-api:
+    build: .
+    container_name: api-ldap
+    ports:
+      - "3001:3001"
+    env_file:
+      - .env
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50' # Limite de 50% de um núcleo de CPU
+          memory: 256M # Limite máximo de memória RAM reduzido para esta API leve
+        reservations:
+          cpus: '0.10' # Reserva mínima garantida
+          memory: 128M # Reserva mínima de memória RAM
