@@ -16,6 +16,7 @@
     "@types/jsonwebtoken": "^9.0.10",
     "@types/ldapjs": "^3.0.6",
     "@types/node": "^25.2.3",
+    "@types/nodemailer": "^7.0.9",
     "nodemon": "^3.1.11",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.3"
@@ -28,6 +29,7 @@
     "fastify": "^5.7.4",
     "jsonwebtoken": "^9.0.3",
     "ldapjs": "^3.0.7",
+    "nodemailer": "^8.0.1",
     "zod": "^4.3.6"
   }
 }

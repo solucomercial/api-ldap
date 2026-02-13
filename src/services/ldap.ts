@@ -2,7 +2,6 @@ import { EventEmitter } from 'events';
 import ldap from 'ldapjs';
 import { env } from '../config/env';
 
-// Função para validar Usuário, Senha e Grupo Específico
 export async function validateLDAPWithGroup(
   username: string, 
   pass: string, 
@@ -10,19 +9,22 @@ export async function validateLDAPWithGroup(
 ): Promise<{ isValid: boolean; message?: string }> {
   const client = ldap.createClient({ url: env.LDAP_URL });
   
-  // Sanitização contra LDAP Injection
   const sanitizedUsername = username.replace(/[()|&*=]/g, '');
-  const userDn = `uid=${sanitizedUsername},${env.LDAP_BASE_DN}`;
+  
+  // Monta o login no formato Windows (UPN) usando a variável de ambiente
+  const userPrincipalName = `${sanitizedUsername}@${env.LDAP_DOMAIN}`;
 
   return new Promise((resolve) => {
-    client.bind(userDn, pass, (err: Error | null) => {
+    client.bind(userPrincipalName, pass, (err: Error | null) => {
       if (err) {
+        console.error(`❌ Falha de autenticação para: ${userPrincipalName}`);
+        console.error(`Motivo técnico: ${err.message}`);
         client.destroy();
         return resolve({ isValid: false, message: 'Usuário ou senha inválidos.' });
       }
 
       const opts: ldap.SearchOptions = {
-        filter: `(uid=${sanitizedUsername})`,
+        filter: `(sAMAccountName=${sanitizedUsername})`,
         scope: 'sub',
         attributes: ['memberOf']
       };
@@ -50,6 +52,7 @@ export async function validateLDAPWithGroup(
           );
 
           if (!hasGroup) {
+            console.warn(`⚠️ Usuário ${sanitizedUsername} logado, mas sem o grupo: ${requiredGroup}`);
             return resolve({ isValid: false, message: 'Acesso negado: Grupo necessário não encontrado.' });
           }
           resolve({ isValid: true });
@@ -64,26 +67,23 @@ export async function validateLDAPWithGroup(
   });
 }
 
-// Função para gerar relatório de usuários inativos (Requer Admin)
 export async function getLastLogonReport(
   adminUser: string,
   adminPass: string,
   daysInactive: number
 ): Promise<{ success: boolean; data?: any[]; message?: string }> {
   const client = ldap.createClient({ url: env.LDAP_URL });
-  const sanitizedAdmin = adminUser.replace(/[()|&*=]/g, '');
-  const adminDn = `uid=${sanitizedAdmin},${env.LDAP_BASE_DN}`;
+  const adminUpn = `${adminUser.replace(/[()|&*=]/g, '')}@${env.LDAP_DOMAIN}`;
 
   return new Promise((resolve) => {
-    client.bind(adminDn, adminPass, (err: Error | null) => {
+    client.bind(adminUpn, adminPass, (err: Error | null) => {
       if (err) {
         client.destroy();
         return resolve({ success: false, message: 'Autenticação do administrador falhou.' });
       }
 
-      // Validar se o solicitante pertence ao grupo Administrators
       const adminSearchOpts: ldap.SearchOptions = {
-        filter: `(uid=${sanitizedAdmin})`,
+        filter: `(sAMAccountName=${adminUser.replace(/[()|&*=]/g, '')})`,
         scope: 'sub',
         attributes: ['memberOf']
       };
@@ -104,7 +104,6 @@ export async function getLastLogonReport(
             return resolve({ success: false, message: 'Acesso negado: Requer privilégios de administrador.' });
           }
 
-          // Cálculo do Timestamp do AD (100ns desde 1601)
           const thresholdDate = new Date();
           thresholdDate.setDate(thresholdDate.getDate() - daysInactive);
           const adTimestamp = (thresholdDate.getTime() + 11644473600000) * 10000;
@@ -126,7 +125,7 @@ export async function getLastLogonReport(
               inactiveUsers.push({ name: cn, email: mail, lastLogon: lastLogonDate });
             });
 
-            res.on('end', () => {
+            reportRes.on('end', () => {
               client.destroy();
               resolve({ success: true, data: inactiveUsers });
             });
