@@ -6,9 +6,13 @@ import net from 'node:net';
 import { env } from './config/env';
 import { loginRoutes } from './routes/login';
 import { lastLogonRoutes } from './routes/lastLogon';
+import { notifyConnectionFailure } from './services/mail'; // Importação do serviço de e-mail
 
 const app = fastify({ logger: true });
 
+/**
+ * Validação nativa de conectividade TCP
+ */
 function checkLdapConnectivity(url: string): Promise<{ alive: boolean; host: string; port: number }> {
   return new Promise((resolve) => {
     try {
@@ -41,10 +45,19 @@ function checkLdapConnectivity(url: string): Promise<{ alive: boolean; host: str
   });
 }
 
+/**
+ * Ciclo de vida da monitoração com notificação por e-mail
+ */
 async function runHealthCheck() {
   const status = await checkLdapConnectivity(env.LDAP_URL);
   if (!status.alive) {
-    app.log.error(`🚨 ALERTA CRÍTICO: Servidor de domínio ${status.host} (${env.LDAP_DOMAIN}) está inacessível.`);
+    const errorMessage = `Servidor de domínio ${status.host} (${env.LDAP_DOMAIN}) está inacessível.`;
+    app.log.error(`🚨 ALERTA CRÍTICO: ${errorMessage}`);
+    
+    // Dispara o e-mail de alerta em caso de falha
+    await notifyConnectionFailure(errorMessage).catch(err => 
+      app.log.error(`Falha ao enviar e-mail de alerta: ${err.message}`)
+    );
   } else {
     app.log.info(`✅ Conexão estável com o domínio ${env.LDAP_DOMAIN}.`);
   }
@@ -59,7 +72,7 @@ app.register(lastLogonRoutes);
 
 app.listen({ port: env.PORT, host: '0.0.0.0' })
   .then(async () => {
-    console.log(`🚀 API Soluções rodando em http://localhost:${env.PORT}`);
+    console.log(`🚀 API LDAP rodando em http://localhost:${env.PORT}`);
     
     // Inicia monitoramento imediato e agenda a cada 10 min (600.000ms)
     await runHealthCheck();
