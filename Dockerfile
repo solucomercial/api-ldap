@@ -10,9 +10,14 @@ RUN npm run build
 FROM node:20-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV production
+
+# Copiar apenas o necessário do estágio anterior
 COPY --from=builder /app/package*.json ./
 COPY --from=builder /app/dist ./dist
-RUN npm install --only=production
+COPY --from=builder /app/node_modules ./node_modules
+
+# Segurança: Executar como utilizador não-root
+USER node
 
 EXPOSE 3001
 CMD ["node", "dist/server.ts"]
