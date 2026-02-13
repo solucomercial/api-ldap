@@ -4,36 +4,38 @@ import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
 import { env } from './config/env';
 import { loginRoutes } from './routes/login';
+import { lastLogonRoutes } from './routes/lastLogon';
 
-const app = fastify({ 
-  logger: true 
-});
+const app = fastify({ logger: true });
 
-// 1. Configuração de Cabeçalhos de Segurança (Helmet)
+// Segurança de Cabeçalhos
 app.register(helmet);
 
-// 2. Configuração de CORS (Restringir quem pode chamar a API)
+// Controle de Acesso (CORS)
 app.register(cors, {
-  origin: true, // Em produção, altere para ['https://seu-dashboard.com.br']
+  origin: true, // Em produção, mude para seu domínio específico
   methods: ['POST']
 });
 
-// 3. Proteção contra Brute Force
+// Prevenção de Força Bruta
 app.register(rateLimit, {
-  max: 10, // Máximo de 10 pedidos
-  timeWindow: '1 minute', // Por minuto por IP
-  errorResponseBuilder: () => {
-    return { 
-      statusCode: 429, 
-      error: 'Too Many Requests', 
-      message: 'Muitas tentativas de login. Tente novamente em 1 minuto.' 
-    };
-  }
+  max: 15, 
+  timeWindow: '1 minute',
+  errorResponseBuilder: () => ({
+    statusCode: 429,
+    message: 'Muitas requisições. Tente novamente em breve.'
+  })
 });
 
+// Registro de Rotas
 app.register(loginRoutes);
+app.register(lastLogonRoutes);
 
 app.listen({ port: env.PORT, host: '0.0.0.0' })
   .then(() => {
-    console.log(`🚀 Auth API Segura rodando em http://localhost:${env.PORT}`);
+    console.log(`🚀 API Soluções rodando em http://localhost:${env.PORT}`);
+  })
+  .catch(err => {
+    app.log.error(err);
+    process.exit(1);
   });
