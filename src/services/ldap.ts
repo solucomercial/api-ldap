@@ -13,14 +13,10 @@ export async function validateLDAPWithGroup(
 ): Promise<{ isValid: boolean; message?: string }> {
   const client = ldap.createClient({ url: env.LDAP_URL });
   
-  // Sanitização contra LDAP Injection
   const sanitizedUsername = username.replace(/[()|&*=]/g, '');
-  
-  // Monta o login no formato Windows (UPN) usando a variável de ambiente LDAP_DOMAIN
   const userPrincipalName = `${sanitizedUsername}@${env.LDAP_DOMAIN}`;
 
   return new Promise((resolve) => {
-    // Tenta o bind inicial (autenticação) com o UPN
     client.bind(userPrincipalName, pass, (err: Error | null) => {
       if (err) {
         console.error(`❌ Falha de autenticação (Bind) para: ${userPrincipalName}`);
@@ -29,7 +25,6 @@ export async function validateLDAPWithGroup(
         return resolve({ isValid: false, message: 'Usuário ou senha inválidos.' });
       }
 
-      // Após a autenticação, busca os grupos (memberOf) usando o sAMAccountName
       const opts: ldap.SearchOptions = {
         filter: `(sAMAccountName=${sanitizedUsername})`,
         scope: 'sub',
@@ -38,7 +33,6 @@ export async function validateLDAPWithGroup(
 
       client.search(env.LDAP_BASE_DN, opts, (err: Error | null, res: EventEmitter) => {
         if (err) {
-          console.error(`❌ Erro na busca de grupos: ${err.message}`);
           client.destroy();
           return resolve({ isValid: false, message: 'Erro na consulta de permissões.' });
         }
@@ -56,7 +50,6 @@ export async function validateLDAPWithGroup(
         res.on('end', () => {
           client.destroy();
           
-          // Verifica se o CN do grupo exigido está presente na lista memberOf
           const hasGroup = userGroups.some(groupDn => 
             groupDn.includes(`cn=${requiredGroup.toLowerCase()}`)
           );
@@ -70,7 +63,6 @@ export async function validateLDAPWithGroup(
         });
 
         res.on('error', (err: Error) => {
-          console.error(`❌ Erro de stream na conexão LDAP: ${err.message}`);
           client.destroy();
           resolve({ isValid: false, message: 'Falha na comunicação com o domínio.' });
         });
@@ -80,7 +72,8 @@ export async function validateLDAPWithGroup(
 }
 
 /**
- * Gera relatório de usuários inativos (requer privilégios de Administrador no domínio).
+ * Gera relatório de usuários inativos que estão COM A CONTA ATIVA.
+ * Informa explicitamente se o sizeLimit do servidor for excedido.
  */
 export async function getLastLogonReport(
   adminUser: string,
@@ -100,7 +93,6 @@ export async function getLastLogonReport(
         return resolve({ success: false, message: 'Autenticação do administrador falhou.' });
       }
 
-      // Valida se o solicitante pertence ao grupo Administrators
       const adminSearchOpts: ldap.SearchOptions = {
         filter: `(sAMAccountName=${sanitizedAdmin})`,
         scope: 'sub',
@@ -124,13 +116,12 @@ export async function getLastLogonReport(
             return resolve({ success: false, message: 'Acesso negado: Requer privilégios de administrador.' });
           }
 
-          // Cálculo do Timestamp do AD (intervalos de 100ns desde 1 de janeiro de 1601)
           const thresholdDate = new Date();
           thresholdDate.setDate(thresholdDate.getDate() - daysInactive);
           const adTimestamp = (thresholdDate.getTime() + 11644473600000) * 10000;
 
           const reportOpts: ldap.SearchOptions = {
-            filter: `(&(objectClass=user)(lastLogonTimestamp<=${adTimestamp}))`,
+            filter: `(&(objectClass=user)(!(userAccountControl:1.2.840.113556.1.4.803:=2))(lastLogonTimestamp<=${adTimestamp}))`,
             scope: 'sub',
             attributes: ['cn', 'mail', 'lastLogonTimestamp']
           };
@@ -138,6 +129,11 @@ export async function getLastLogonReport(
           const inactiveUsers: any[] = [];
           
           client.search(env.LDAP_BASE_DN, reportOpts, (err, reportRes: EventEmitter) => {
+            if (err) {
+              client.destroy();
+              return resolve({ success: false, message: 'Erro ao iniciar a busca no servidor.' });
+            }
+
             reportRes.on('searchEntry', (entry: ldap.SearchEntry) => {
               const cn = entry.attributes.find((a: any) => a.type === 'cn')?.values[0];
               const mail = entry.attributes.find((a: any) => a.type === 'mail')?.values[0];
@@ -145,6 +141,18 @@ export async function getLastLogonReport(
               
               const lastLogonDate = ts ? new Date(Number(ts) / 10000 - 11644473600000) : 'Nunca';
               inactiveUsers.push({ name: cn, email: mail, lastLogon: lastLogonDate });
+            });
+
+            // Tratamento específico para limite de tamanho excedido
+            reportRes.on('error', (err: any) => {
+              client.destroy();
+              if (err.name === 'SizeLimitExceededError') {
+                return resolve({ 
+                  success: false, 
+                  message: 'O limite de resultados do servidor LDAP foi excedido (MaxPageSize). A lista é muito grande para ser exibida sem paginação.' 
+                });
+              }
+              resolve({ success: false, message: `Erro na consulta: ${err.message}` });
             });
 
             reportRes.on('end', () => {
