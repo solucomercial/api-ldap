@@ -20,4 +20,4 @@ COPY --from=builder /app/node_modules ./node_modules
 USER node
 
 EXPOSE 3001
-CMD ["node", "dist/server.ts"]
+CMD ["node", "dist/server.js"]
