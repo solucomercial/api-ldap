@@ -9,6 +9,11 @@ const envSchema = z.object({
   LDAP_BIND_PASSWORD: z.string(),
   JWT_SECRET: z.string().min(32),
   PORT: z.string().default('3001').transform(Number),
+  SMTP_HOST: z.string(),
+  SMTP_PORT: z.string().transform(Number),
+  SMTP_USER: z.string(),
+  SMTP_PASS: z.string(),
+  EMAIL_NOTIFICACAO: z.string().min(1),
 });
 
 const _env = envSchema.safeParse(process.env);
