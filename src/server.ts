@@ -13,7 +13,7 @@ import { notifyConnectionFailure } from './services/mail';
 
 const app = fastify({ 
   logger: true,
-  trustProxy: true, // Importante para Docker/Proxies reconhecerem IPs corretamente
+  trustProxy: true, // Necessário para Docker identificar a origem correta
   ajv: {
     customOptions: {
       strict: false,
@@ -22,17 +22,19 @@ const app = fastify({
   }
 });
 
-// SEGURANÇA: Configuração robusta para evitar tela em branco no Docker
+// SEGURANÇA: Configuração expandida para permitir o Scalar no Docker
 app.register(helmet, {
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      // 'unsafe-eval' e worker-src são fundamentais para o motor do Scalar renderizar no navegador
+      // Adicionado 'unsafe-eval' e worker-src (O Scalar precisa para processar o OpenAPI no browser)
       scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'", "https://cdn.jsdelivr.net"],
       styleSrc: ["'self'", "'unsafe-inline'", "https://cdn.jsdelivr.net"],
+      // Adicionado fontSrc para os ícones do Scalar
       fontSrc: ["'self'", "https://cdn.jsdelivr.net"],
       imgSrc: ["'self'", "data:", "https://cdn.jsdelivr.net"],
       connectSrc: ["'self'", "https://cdn.jsdelivr.net"],
+      // Adicionado workerSrc para o motor de busca e renderização
       workerSrc: ["'self'", "blob:"],
     },
   },
@@ -41,7 +43,7 @@ app.register(helmet, {
 app.register(cors, { origin: true, methods: ['POST'] });
 app.register(rateLimit, { max: 15, timeWindow: '1 minute' });
 
-// DOCUMENTAÇÃO: Registro do motor (Configurado para auto-detectar o IP no Docker)
+// 1. REGISTO DO SWAGGER (Deve vir antes das rotas)
 app.register(swagger, {
   openapi: {
     info: {
@@ -49,15 +51,14 @@ app.register(swagger, {
       description: 'Documentação técnica para autenticação e relatórios de domínio.',
       version: '1.0.0',
     },
-    // Deixamos sem o campo "servers" fixo para que o Swagger use o IP/Host atual de acesso automaticamente
   },
 });
 
-// ROTAS
+// 2. REGISTO DAS ROTAS
 app.register(loginRoutes);
 app.register(lastLogonRoutes);
 
-// INTERFACE: Scalar
+// 3. REGISTO DO SCALAR (Deve vir DEPOIS das rotas)
 app.register(scalar, {
   routePrefix: '/docs',
   configuration: {
@@ -104,9 +105,6 @@ function checkLdapConnectivity(url: string): Promise<{ alive: boolean; host: str
   });
 }
 
-/**
- * Ciclo de monitoramento interno
- */
 async function runHealthCheck() {
   const status = await checkLdapConnectivity(env.LDAP_URL);
   if (!status.alive) {
@@ -118,10 +116,10 @@ async function runHealthCheck() {
   }
 }
 
-// INICIALIZAÇÃO: Garantindo prontidão antes de abrir a porta
+// INICIALIZAÇÃO: Garantindo prontidão total
 const start = async () => {
   try {
-    await app.ready(); // Crucial para o Swagger gerar o JSON antes do primeiro acesso à documentação
+    await app.ready(); // <--- Certifica que o Swagger gerou o JSON antes do servidor abrir
     await app.listen({ port: env.PORT, host: '0.0.0.0' });
     console.log(`🚀 API LDAP rodando em http://localhost:${env.PORT}`);
     
