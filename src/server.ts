@@ -13,7 +13,7 @@ import { notifyConnectionFailure } from './services/mail';
 
 const app = fastify({ 
   logger: true,
-  trustProxy: true, // Necessário para Docker identificar a origem correta
+  trustProxy: true, // Necessário para Docker identificar IPs
   ajv: {
     customOptions: {
       strict: false,
@@ -22,43 +22,41 @@ const app = fastify({
   }
 });
 
-// SEGURANÇA: Configuração expandida para permitir o Scalar no Docker
+// SEGURANÇA: Liberando o Scalar no Docker (Obrigatório para não ficar branco)
 app.register(helmet, {
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      // Adicionado 'unsafe-eval' e worker-src (O Scalar precisa para processar o OpenAPI no browser)
-      scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'", "https://cdn.jsdelivr.net"],
+      // Adicionado 'unsafe-eval' e 'blob:' -> O Scalar precisa disso para rodar o motor de renderização
+      scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'", "https://cdn.jsdelivr.net", "blob:"],
       styleSrc: ["'self'", "'unsafe-inline'", "https://cdn.jsdelivr.net"],
-      // Adicionado fontSrc para os ícones do Scalar
       fontSrc: ["'self'", "https://cdn.jsdelivr.net"],
       imgSrc: ["'self'", "data:", "https://cdn.jsdelivr.net"],
       connectSrc: ["'self'", "https://cdn.jsdelivr.net"],
-      // Adicionado workerSrc para o motor de busca e renderização
+      // Adicionado worker-src -> Permite que o Scalar processe o OpenAPI em segundo plano
       workerSrc: ["'self'", "blob:"],
     },
   },
 });
 
-app.register(cors, { origin: true, methods: ['POST'] });
+app.register(cors, { origin: true, methods: ['POST', 'GET'] });
 app.register(rateLimit, { max: 15, timeWindow: '1 minute' });
 
-// 1. REGISTO DO SWAGGER (Deve vir antes das rotas)
+// DOCUMENTAÇÃO: Registro do motor Swagger
 app.register(swagger, {
   openapi: {
     info: {
       title: 'API LDAP - Soluções',
-      description: 'Documentação técnica para autenticação e relatórios de domínio.',
+      description: 'Documentação técnica de autenticação e relatórios.',
       version: '1.0.0',
     },
+    // Removido o campo "servers" fixo para evitar erro de CORS/Mixed Content no Docker
   },
 });
 
-// 2. REGISTO DAS ROTAS
 app.register(loginRoutes);
 app.register(lastLogonRoutes);
 
-// 3. REGISTO DO SCALAR (Deve vir DEPOIS das rotas)
 app.register(scalar, {
   routePrefix: '/docs',
   configuration: {
@@ -66,10 +64,7 @@ app.register(scalar, {
       content: () => app.swagger(),
     },
     theme: 'purple',
-    customCss: `
-      :root { --scalar-primary: #004a99; }
-      .dark-mode { --scalar-background-1: #020617; --scalar-background-2: #0f172a; }
-    `,
+    customCss: `:root { --scalar-primary: #004a99; }`,
   },
 });
 
@@ -78,15 +73,12 @@ app.register(healthcheck, {
   underPressureOptions: {
     healthCheckInterval: 5000,
     healthCheck: async () => {
-      const ldapStatus = await checkLdapConnectivity(env.LDAP_URL);
-      return ldapStatus.alive;
+      const status = await checkLdapConnectivity(env.LDAP_URL);
+      return status.alive;
     }
   }
 });
 
-/**
- * Validação de conectividade TCP com o servidor LDAP
- */
 function checkLdapConnectivity(url: string): Promise<{ alive: boolean; host: string; port: number }> {
   return new Promise((resolve) => {
     try {
@@ -111,15 +103,14 @@ async function runHealthCheck() {
     await notifyConnectionFailure({
       host: status.host,
       port: status.port,
-      error: "Timeout de conexão TCP"
+      error: "Falha de conectividade TCP no Docker"
     }).catch(err => app.log.error(err.message));
   }
 }
 
-// INICIALIZAÇÃO: Garantindo prontidão total
 const start = async () => {
   try {
-    await app.ready(); // <--- Certifica que o Swagger gerou o JSON antes do servidor abrir
+    await app.ready(); // Garante que as rotas foram mapeadas antes de abrir o servidor
     await app.listen({ port: env.PORT, host: '0.0.0.0' });
     console.log(`🚀 API LDAP rodando em http://localhost:${env.PORT}`);
     
