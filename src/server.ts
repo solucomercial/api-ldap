@@ -11,9 +11,9 @@ import { loginRoutes } from './routes/login';
 import { lastLogonRoutes } from './routes/lastLogon';
 import { notifyConnectionFailure } from './services/mail';
 
-// 1. INICIALIZAÇÃO: Suporte para 'example' na documentação e validação
 const app = fastify({ 
   logger: true,
+  trustProxy: true, // Importante para Docker/Proxies reconhecerem IPs corretamente
   ajv: {
     customOptions: {
       strict: false,
@@ -22,7 +22,7 @@ const app = fastify({
   }
 });
 
-// 2. SEGURANÇA: Configuração do Helmet ajustada para permitir scripts/estilos do Scalar
+// SEGURANÇA: Adicionado 'connectSrc' para permitir que o Scalar leia o JSON da API
 app.register(helmet, {
   contentSecurityPolicy: {
     directives: {
@@ -30,6 +30,7 @@ app.register(helmet, {
       scriptSrc: ["'self'", "'unsafe-inline'", "https://cdn.jsdelivr.net"],
       styleSrc: ["'self'", "'unsafe-inline'", "https://cdn.jsdelivr.net"],
       imgSrc: ["'self'", "data:", "https://cdn.jsdelivr.net"],
+      connectSrc: ["'self'", "https://cdn.jsdelivr.net"], // Essencial para o Scalar no Docker
     },
   },
 });
@@ -37,7 +38,7 @@ app.register(helmet, {
 app.register(cors, { origin: true, methods: ['POST'] });
 app.register(rateLimit, { max: 15, timeWindow: '1 minute' });
 
-// 3. DOCUMENTAÇÃO (MOTOR): Swagger deve ser registado antes das rotas
+// DOCUMENTAÇÃO: Registro do motor
 app.register(swagger, {
   openapi: {
     info: {
@@ -45,14 +46,17 @@ app.register(swagger, {
       description: 'Documentação técnica para autenticação e relatórios de domínio.',
       version: '1.0.0',
     },
+    servers: [
+      { url: `http://localhost:${env.PORT}`, description: 'Local' }
+    ]
   },
 });
 
-// 4. ROTAS: O Swagger irá "escanear" os schemas destas rotas
+// ROTAS
 app.register(loginRoutes);
 app.register(lastLogonRoutes);
 
-// 5. INTERFACE: Scalar a carregar a especificação do Swagger
+// INTERFACE
 app.register(scalar, {
   routePrefix: '/docs',
   configuration: {
@@ -61,21 +65,14 @@ app.register(scalar, {
     },
     theme: 'purple',
     customCss: `
-      :root {
-        --scalar-primary: #004a99; /* Azul Soluções */
-      }
-      .dark-mode {
-        --scalar-background-1: #020617; /* Slate 950 */
-        --scalar-background-2: #0f172a;
-      }
+      :root { --scalar-primary: #004a99; }
+      .dark-mode { --scalar-background-1: #020617; --scalar-background-2: #0f172a; }
     `,
   },
 });
 
-// 6. MONITORIZAÇÃO: Rota /health com verificação de LDAP
 app.register(healthcheck, {
   healthcheckUrl: '/health',
-  exposeUptime: true,
   underPressureOptions: {
     healthCheckInterval: 5000,
     healthCheck: async () => {
@@ -85,34 +82,17 @@ app.register(healthcheck, {
   }
 });
 
-/**
- * Validação de conectividade TCP com o servidor LDAP
- */
 function checkLdapConnectivity(url: string): Promise<{ alive: boolean; host: string; port: number }> {
   return new Promise((resolve) => {
     try {
       const parsedUrl = new URL(url);
       const host = parsedUrl.hostname;
       const port = parseInt(parsedUrl.port) || 389;
-      
       const socket = new net.Socket();
       socket.setTimeout(3000);
-
-      socket.on('connect', () => {
-        socket.destroy();
-        resolve({ alive: true, host, port });
-      });
-
-      socket.on('timeout', () => {
-        socket.destroy();
-        resolve({ alive: false, host, port });
-      });
-
-      socket.on('error', () => {
-        socket.destroy();
-        resolve({ alive: false, host, port });
-      });
-
+      socket.on('connect', () => { socket.destroy(); resolve({ alive: true, host, port }); });
+      socket.on('timeout', () => { socket.destroy(); resolve({ alive: false, host, port }); });
+      socket.on('error', () => { socket.destroy(); resolve({ alive: false, host, port }); });
       socket.connect(port, host);
     } catch {
       resolve({ alive: false, host: 'invalid', port: 0 });
@@ -120,37 +100,30 @@ function checkLdapConnectivity(url: string): Promise<{ alive: boolean; host: str
   });
 }
 
-/**
- * Ciclo de monitorização interna para envio de alertas por e-mail
- */
 async function runHealthCheck() {
   const status = await checkLdapConnectivity(env.LDAP_URL);
   if (!status.alive) {
-    const errorMsg = "O servidor não respondeu ao teste de conexão TCP.";
-    app.log.error(`🚨 ALERTA CRÍTICO: ${status.host}:${status.port} inacessível.`);
-    
     await notifyConnectionFailure({
       host: status.host,
       port: status.port,
-      error: errorMsg
-    }).catch(err => 
-      app.log.error(`Falha ao enviar e-mail de alerta: ${err.message}`)
-    );
-  } else {
-    app.log.info(`✅ Conexão estável com o domínio ${env.LDAP_DOMAIN}.`);
+      error: "Timeout de conexão TCP"
+    }).catch(err => app.log.error(err.message));
   }
 }
 
-// 7. INICIALIZAÇÃO DO SERVIDOR
-app.listen({ port: env.PORT, host: '0.0.0.0' })
-  .then(async () => {
+// INICIALIZAÇÃO: Garantindo prontidão antes de abrir a porta
+const start = async () => {
+  try {
+    await app.ready(); // Garante que o Swagger gerou o JSON antes do listen
+    await app.listen({ port: env.PORT, host: '0.0.0.0' });
     console.log(`🚀 API LDAP rodando em http://localhost:${env.PORT}`);
-    console.log(`📄 Documentação disponível em http://localhost:${env.PORT}/docs`);
     
     await runHealthCheck();
-    setInterval(runHealthCheck, 600000); // Executa o check interno a cada 10 min
-  })
-  .catch(err => {
+    setInterval(runHealthCheck, 600000);
+  } catch (err) {
     app.log.error(err);
     process.exit(1);
-  });
+  }
+};
+
+start();
