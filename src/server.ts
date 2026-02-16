@@ -22,15 +22,18 @@ const app = fastify({
   }
 });
 
-// SEGURANÇA: Adicionado 'connectSrc' para permitir que o Scalar leia o JSON da API
+// SEGURANÇA: Configuração robusta para evitar tela em branco no Docker
 app.register(helmet, {
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      scriptSrc: ["'self'", "'unsafe-inline'", "https://cdn.jsdelivr.net"],
+      // 'unsafe-eval' e worker-src são fundamentais para o motor do Scalar renderizar no navegador
+      scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'", "https://cdn.jsdelivr.net"],
       styleSrc: ["'self'", "'unsafe-inline'", "https://cdn.jsdelivr.net"],
+      fontSrc: ["'self'", "https://cdn.jsdelivr.net"],
       imgSrc: ["'self'", "data:", "https://cdn.jsdelivr.net"],
-      connectSrc: ["'self'", "https://cdn.jsdelivr.net"], // Essencial para o Scalar no Docker
+      connectSrc: ["'self'", "https://cdn.jsdelivr.net"],
+      workerSrc: ["'self'", "blob:"],
     },
   },
 });
@@ -38,7 +41,7 @@ app.register(helmet, {
 app.register(cors, { origin: true, methods: ['POST'] });
 app.register(rateLimit, { max: 15, timeWindow: '1 minute' });
 
-// DOCUMENTAÇÃO: Registro do motor
+// DOCUMENTAÇÃO: Registro do motor (Configurado para auto-detectar o IP no Docker)
 app.register(swagger, {
   openapi: {
     info: {
@@ -46,9 +49,7 @@ app.register(swagger, {
       description: 'Documentação técnica para autenticação e relatórios de domínio.',
       version: '1.0.0',
     },
-    servers: [
-      { url: `http://localhost:${env.PORT}`, description: 'Local' }
-    ]
+    // Deixamos sem o campo "servers" fixo para que o Swagger use o IP/Host atual de acesso automaticamente
   },
 });
 
@@ -56,7 +57,7 @@ app.register(swagger, {
 app.register(loginRoutes);
 app.register(lastLogonRoutes);
 
-// INTERFACE
+// INTERFACE: Scalar
 app.register(scalar, {
   routePrefix: '/docs',
   configuration: {
@@ -82,6 +83,9 @@ app.register(healthcheck, {
   }
 });
 
+/**
+ * Validação de conectividade TCP com o servidor LDAP
+ */
 function checkLdapConnectivity(url: string): Promise<{ alive: boolean; host: string; port: number }> {
   return new Promise((resolve) => {
     try {
@@ -100,6 +104,9 @@ function checkLdapConnectivity(url: string): Promise<{ alive: boolean; host: str
   });
 }
 
+/**
+ * Ciclo de monitoramento interno
+ */
 async function runHealthCheck() {
   const status = await checkLdapConnectivity(env.LDAP_URL);
   if (!status.alive) {
@@ -114,7 +121,7 @@ async function runHealthCheck() {
 // INICIALIZAÇÃO: Garantindo prontidão antes de abrir a porta
 const start = async () => {
   try {
-    await app.ready(); // Garante que o Swagger gerou o JSON antes do listen
+    await app.ready(); // Crucial para o Swagger gerar o JSON antes do primeiro acesso à documentação
     await app.listen({ port: env.PORT, host: '0.0.0.0' });
     console.log(`🚀 API LDAP rodando em http://localhost:${env.PORT}`);
     
